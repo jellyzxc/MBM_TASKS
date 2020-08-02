@@ -1,0 +1,812 @@
+---
+title: 'Data Scientist Interview_MBM: Part-2 '
+author: "XiaocuiZhang"
+date: "2020/8/1"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,warning=FALSE)
+```
+
+```{r results="hide"}
+#load librarys and data
+
+library(readxl)
+library(dplyr)
+library(ggplot2)
+library(lubridate)
+library(RColorBrewer) 
+library(corrgram)
+library(visdat)
+library(caret)
+library(ggfortify)
+library(Metrics)
+library(Hmisc)
+library(relaimpo)
+library(car)
+library(MLmetrics )
+
+rawdata <- read_excel("data2.xlsx",col_names =T,skip=1,col_types = NULL) 
+```
+
+### 1 Data Exploration and Visualization
+
+#### 1.1 Descriptive statistics
+```{r}
+glimpse(rawdata) 
+```
+
+<font color="blue"> 
+There are 36 observations of 13 variables in the data set and most the variables are numeric except Month.
+</font>
+
+##### 1.2 descriptive statistics 
+
+```{r}
+str(rawdata)
+summary(rawdata)
+```
+
+
+ * <font color="blue"> Price1 is constant and Price2 and Price3 changed only once during the given period;</br></font>
+ * <font color="blue"> Months  are continuous without breakpoints;</br></font> 
+ * <font color="blue"> There is a missing value in social(when month=2018/8/1).</font> 
+
+##### 1.3 missing valuses
+```{r}
+vis_miss(rawdata, cluster = FALSE, sort_miss = FALSE, show_perc = TRUE,
+         show_perc_col = TRUE, large_data_size = 9e+05,
+         warn_large_data = TRUE)
+```
+
+##### 1.4 possible outliers
+```{r}
+data_num <- scale(rawdata[,-1],center =TRUE, scale = TRUE)
+boxplot(x =data_num, use.cols = TRUE, notch = FALSE, varwidth = FALSE,  center=TRUE,
+        horizontal = FALSE, col = brewer.pal(n = ncol(data_num), name = "RdBu"),range = 1.5, main = "Boxplots of numerical data")
+```
+
+
+##### 1.5 correlation
+
+```{r warning=FALSE}
+corrgram(rawdata[,-1],  
+         text.panel = panel.txt,
+         main = "Correlation ",
+         lower.panel=panel.shade,
+         upper.panel=panel.cor)
+```
+
+<font color="blue"> Some dimensions(Pirce2&Price3,Radio&TV) are highly correlated(absolute correlation coefficient of >0.7 among two predictors indicates the presence of multicollinearity </font>
+
+
+##### 1.6 visualziton 
+```{r}
+library(xts)
+temp_sales=xts(rawdata$Sales, rawdata$Month,frequency=12)
+plot(temp_sales)
+hist(rawdata$Sales)
+ 
+
+```
+
+<font color="blue"> The sales shows some kind of periodicity and the right-skewed distribution means its mode is larger than mean.</font>
+
+
+```{r}
+ggplot(data = rawdata,aes(y=Sales))+    
+  geom_point(data = rawdata,aes(x=Magazine,colour='Magazine'),size=3) +
+  geom_point(data = rawdata,aes(x=Newspaper,colour='Newspaper'),size=3)+ 
+  geom_point(data = rawdata,aes(x=Radio,colour='Radio'),size=3) +
+  geom_point(data = rawdata,aes(x=OOH,colour='OOH'),size=3)+ 
+  geom_point(data = rawdata,aes(x=TV,colour='TV'),size=3)+ 
+  geom_point(data = rawdata,aes(x=Search,colour='Search'),size=3) +
+  geom_point(data = rawdata,aes(x=Display,colour='Display'),size=3) +
+  geom_point(data = rawdata,aes(x=Social,colour='Social'),size=3) + xlab ("Media spend")+
+  ggtitle ("Sales vs Media spend on different channels ") +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+ 
+```{r}
+X_ad=rawdata[,-c(1,10,11,12,13)]
+sales=rawdata$Sales
+total_spend=rowSums(X_ad,na.rm=TRUE)
+temp=data.frame(sales,total_spend)
+ggplot(data = temp,aes(y=sales,x=total_spend))+    
+  geom_point(aes(x=total_spend),size=3)+ 
+  geom_line(aes(x=total_spend ),size=1)+ geom_smooth(method=lm)+
+  xlab("Media spending(all channels)")+ylab("Sales")+
+  ggtitle ("sales response to Media spending ") +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+
+```{r}
+Magazine_stock=stats::filter(x=rawdata$Magazine, filter=0.6, method="recursive") 
+ggplot(data = rawdata,aes(y=Sales))+    
+  geom_point(aes(x=Magazine_stock,colour='Magazine_stock'),size=3)+ 
+  geom_line(aes(x=Magazine_stock, colour="Magazine_stock"),size=1)+ 
+  geom_point(data =rawdata,aes(x=Magazine,colour='Magazine'),size=3)+
+  geom_line(aes(x=Magazine, colour="Magazine"),size=1) +
+  xlab("Magazine spending")+ylab("Sales")+
+  ggtitle ("The relation between sales and magazine: before or after adstock transformation(rate=0.6)") +
+  theme(plot.title = element_text(hjust = 0.6))
+```
+
+
+```{r}
+ts_all=ts(rawdata[-1], start = c(2016, 4), freq = 12)
+ts_ad=ts(rawdata[,-c(1,10,11,12)], start = c(2016, 4), freq = 12)
+ts_price=ts(rawdata[,10:13], start = c(2016, 4), freq = 12)
+ts_sales=ts(rawdata$Sales, start = c(2016, 4), freq = 12)
+
+autoplot(ts_ad)+
+  ggtitle("Time Series Plot of the media spend") +
+  theme(plot.title = element_text(hjust = 0.5))
+
+```
+
+ 
+
+### 2 Data preparation
+
+####  2.1 change month's data type  
+```{r}
+#convert month to datetime
+rawdata$Month=as.Date(rawdata$Month, origin="1970-01-01") 
+```
+
+
+####  2.2 impute social 
+
+```{r}
+rawdata$Social <- impute(rawdata$Social,0)  #also always 0 on Augest
+```
+
+####  2.3 check and transform sales
+
+
+```{r}
+par(mfrow=c(2,2))
+acf(ts_sales)
+pacf(ts_sales)
+
+
+acf(log(ts_sales))
+pacf(log(ts_sales))
+par(mfrow=c(1,1))
+```
+
+<font color="blue">The autocorrelation exitsand and log transformation doesn't work.Hence,I try to decompose sales  
+to ensure its stationarity and independence</font>
+
+```{r}
+ts_sales_components <- decompose(ts_sales) #Sort of a fourier transformation to decompose signal
+plot(ts_sales_components, xlab="time (3 years)",cex=5, frame.plot=TRUE,col.axis="grey",col=c("blue"),axes=FALSE)
+ts_adjusted_sales <- ts_sales - ts_sales_components$seasonal
+plot(ts_adjusted_sales)
+
+acf(ts_adjusted_sales)
+pacf(ts_adjusted_sales)
+hist(ts_adjusted_sales)
+
+#refrence https://rpubs.com/nihil0/mmm01
+```
+
+#### 2.4 train and test split  
+
+* <font color="blue">Observations in the time series are dependent: the past affects the future but the future does not affect;</br></font>
+* <font color="blue"> using createTimeSlices(): 24 obervations for training, 6 for validation  and 6 for testing .</font>
+
+```{r}
+set.seed(100)
+ts_Split<- caret::createTimeSlices(y = 1:36, initialWindow =24, horizon =6, fixedWindow = T,skip = 0)
+#horizon: The number of consecutive values in test set sample
+# Nested Cross-Validation reference:
+# https://lonepatient.top/2018/06/10/time-series-nested-cross-validation.html#2-%E4%BB%BB%E6%84%8F%E9%80%89%E6%8B%A9%E6%B5%8B%E8%AF%95%E9%9B%86  
+# https://scikit-learn.org/stable/modules/cross_validation.html
+```
+
+
+### 3 Model traing and tune parameters
+
+```{r}
+#seperated datasets  
+X_all=rawdata[,-c(1,13)]
+X_ad=rawdata[,-c(1,10,11,12,13)]
+X_price=rawdata[,10:12]
+sales=rawdata$Sales
+adjusted_sales=ts_adjusted_sales 
+
+adstock_Rates=seq(from=0, to=1, by=0.05) 
+Num_loop=length(ts_Split$train) # how many loops
+vali_len=6                      #observation count for valiation
+
+```
+
+##### 3.1 Build  Models and find the proper adstock Rates using Nested Cross-Validation
+
+```{r}
+#==================================
+# AdstockTransform function
+#==================================
+#observation: the feature(s) to be transformed
+#signal=0 sample linear Adstock transformed;    else: eg signal=1: using complicated method;   more transformation forms could be added.....
+#rate : Adstock rate
+#==================================
+AdstockTransform <- function(observation,rate,signal){
+ 
+  if(signal==0){
+    for(i in names(observation))
+    {
+      observation[[i]]= as.numeric(stats::filter(x=observation[[i]], filter=rate, method="recursive"))
+    }
+  }
+  else{
+    for(i in names(observation))
+    {
+      observation[[i]]= as.numeric(stats::filter(x= 1/(1+exp(-2*observation[[i]])), filter=rate, method="recursive"))
+    }
+  }
+ adstock_Df=data.frame(observation)
+ 
+ return (adstock_Df) 
+}
+```
+
+```{r}
+#==================================
+# Get_bestRate function: 
+#==================================
+# tf_signal：signal=0 sample linear Adstock transformed;    signal=1: using complicated method
+# mediaChannel：ad predictors ,like TV, Radio....
+# sales：Target variable
+# vali_len：how many observations for validation 
+# Num_loop：how many times for cv,depends on the observation counts and  createTimeSlices()
+# adstock_Rates：a list of Adstock rate 
+#==================================
+
+Get_bestRate<-function(tf_signal, mediaChannel,sales,vali_len=6,Num_loop,adstock_Rates){
+  
+  #Container to save the cv results
+  tuningResult<- data.frame(matrix(ncol = 3, nrow = 0))
+  colnames(tuningResult) <- c("rate", "R2", "RMSE")
+  
+  best_Rate=0
+  
+  for(rate in adstock_Rates)
+  {
+    for(i in 1:Num_loop)
+    {
+ 
+      
+      ColNames=names(mediaChannel)
+      
+      X=data.frame(mediaChannel[ts_Split$train[i][[1]],])
+      y=sales[ts_Split$train[i][[1]]]
+      nr=nrow(X)
+      
+      #adstockTransform
+      adstock=AdstockTransform(X,rate,tf_signal) 
+      #filter first then split Train and Valiation as the first observation in Valiation set should be filtered
+      
+      
+      # training and Valiation  split
+      adstock_Train=data.frame(adstock[1:(nr-vali_len),]) 
+      adstock_Valia=data.frame(adstock[(nr-vali_len+1):nr,]) 
+      
+       
+      colnames(adstock_Train) <- ColNames
+      colnames(adstock_Valia) <- ColNames
+      
+      
+      y_Train=y[1:(nr-vali_len)]
+      y_Valia=y[(nr-vali_len+1):nr]
+      
+ 
+      
+      #Using a multiple regression model to fit the data
+      modFit <- lm(y_Train~.,data=adstock_Train)
+       
+      #Valiation 
+      pred_y=predict(modFit,newdata=adstock_Valia)
+      
+      #meric
+      R2=summary(modFit)$r.squared 
+      RMSE=rmse(y_Valia,pred_y)
+      tuningResult=rbind(tuningResult,data.frame(rate, R2, RMSE) ) 
+      
+    }
+  }
+  
+  cv_result=tuningResult%>% group_by(rate)%>% 
+    summarise(
+      R2_avg= mean(R2),
+      RMSE_avg = mean(RMSE)
+    )
+  
+  cv_result=data.frame(cv_result) 
+  best_Rate=cv_result[which.max(cv_result$R2_avg),1]
+  
+  out <- list(cv_result=cv_result, best_Rate=best_Rate)
+  return(out)
+}
+
+```
+
+##### 3.2 supposing all channels have the same adstock_Rate 
+```{r warning=FALSE}
+#assuming: 
+# all the channels have the same adstock_Rates
+# Simple Decay-Effect Model 
+
+
+ result_adjusted=Get_bestRate(0,X_ad,adjusted_sales,vali_len,Num_loop,adstock_Rates) 
+ result_adjusted$cv_result
+ result_adjusted$best_Rate    #0.00	 0.7397218	
+ 
+ 
+ #modeling
+ ad_adstock_adjusted=AdstockTransform(X_ad,result_adjusted$best_Rate,0)
+ modFit.1 <- lm(adjusted_sales~.,data=ad_adstock_adjusted)
+ summary(modFit.1)
+ 
+ par(mfrow=c(2,2))
+ plot(modFit.1)
+ par(mfrow=c(1,1))
+ 
+```
+
+
+```{r}
+#assuming: 
+# all the channels have the same adstock_Rates
+# complex Decay-Effect Model 
+
+ result_adjusted=Get_bestRate(1,X_ad,adjusted_sales,vali_len,Num_loop,adstock_Rates) 
+ result_adjusted$cv_result
+ result_adjusted$best_Rate    #0.25  0.7186469
+ 
+ 
+ #modeling
+ ad_adstock_adjusted=AdstockTransform(X_ad,result_adjusted$best_Rate,1)
+ modFit.2 <- lm(adjusted_sales~.,data=ad_adstock_adjusted)
+ summary(modFit.2)
+ 
+ par(mfrow=c(2,2))
+ plot(modFit.1)
+ par(mfrow=c(1,1))
+```
+
+
+##### 3.3  supposing each advertising variable has it’s own adstock_Rate
+
+```{r}
+#assuming: 
+# each advertising variable has it’s own adstock_Rate
+# complex Decay-Effect Mode
+
+
+ # Magazine
+ # adjusted_sales
+ Magazine=data.frame(X_ad$Magazine)
+ result_Magazine=Get_bestRate(1,Magazine,adjusted_sales,vali_len,Num_loop,adstock_Rates) 
+ # result_Magazine$cv_result
+ # result_Magazine$best_Rate   #0.75
+ 
+ 
+ # Newspaper
+ # adjusted_sales
+ Newspaper=data.frame(X_ad$Newspaper)
+ result_Newspaper=Get_bestRate(1,Newspaper,adjusted_sales,vali_len,Num_loop,adstock_Rates) 
+ # result_Newspaper$cv_result
+ # result_Newspaper$best_Rate   #0.75
+ 
+
+ 
+ # Radio
+ # adjusted_sales
+ Radio=data.frame(X_ad$Radio)
+ result_Radio=Get_bestRate(1,Radio,adjusted_sales,vali_len,Num_loop,adstock_Rates) 
+ # result_Radio$cv_result
+ # result_Radio$best_Rate   # 0.90 
+ 
+ 
+ # OOH
+ # adjusted_sales
+ OOH=data.frame(X_ad$OOH)
+ result_OOH=Get_bestRate(1,OOH,adjusted_sales,vali_len,Num_loop,adstock_Rates) 
+ # result_OOH$cv_result
+ # result_OOH$best_Rate   #  0.80 
+ 
+ 
+ # TV
+ # adjusted_sales
+ TV=data.frame(X_ad$TV)
+ result_TV=Get_bestRate(1,TV,adjusted_sales,vali_len,Num_loop,adstock_Rates) 
+ # result_TV$cv_result
+ # result_TV$best_Rate   # 0.40  
+  
+ 
+ # Search
+ # adjusted_sales
+ Search=data.frame(X_ad$Search)
+ result_Search=Get_bestRate(1,Search,adjusted_sales,vali_len,Num_loop,adstock_Rates) 
+ # result_Search$cv_result
+ # result_Search$best_Rate   # 0.2 
+ 
+ 
+ 
+ # Display
+ # adjusted_sales
+ Display=data.frame(X_ad$Display)
+ result_Display=Get_bestRate(1,Display,adjusted_sales,vali_len,Num_loop,adstock_Rates) 
+ # result_Display$cv_result
+ # result_Display$best_Rate   # 0.2 
+ 
+ 
+ # Social
+ # adjusted_sales
+ Social=data.frame(X_ad$Social)
+ result_Social=Get_bestRate(1,Social,adjusted_sales,vali_len,Num_loop,adstock_Rates) 
+ # result_Social$cv_result
+ # result_Social$best_Rate   # 0.4 
+ 
+ #"Magazine"  "Newspaper" "Radio"     "OOH"       "TV"        "Search"    "Display"   "Social"    
+Magazine.adstock=AdstockTransform(Magazine,result_Magazine$best_Rate,1)
+Newspaper.adstock=AdstockTransform(Newspaper,result_Newspaper$best_Rate,1)
+Radio.adstock=AdstockTransform(Radio,result_Radio$best_Rate,1)
+OOH.adstock=AdstockTransform(OOH,result_OOH$best_Rate,1)
+TV.adstock=AdstockTransform(TV,result_TV$best_Rate,1)
+Search.adstock=AdstockTransform(Search,result_Search$best_Rate,1)
+Display.adstock=AdstockTransform(Display,result_Display$best_Rate,1)
+Social.adstock=AdstockTransform(Social,result_Social$best_Rate,1)
+ 
+#modeling
+media_ad=c(Magazine.adstock,Newspaper.adstock,Radio.adstock,OOH.adstock,TV.adstock,Search.adstock,Display.adstock,Social.adstock)
+modFit.3 <-lm(adjusted_sales~.,data=media_ad)
+summary(modFit.3)
+ 
+par(mfrow=c(2,2))
+plot(modFit.3)
+par(mfrow=c(1,1))
+```
+```{r}
+ChannelName=names(X_ad)
+AdstockRate=c(result_Magazine$best_Rate, 
+              result_Newspaper$best_Rate,
+              result_Radio$best_Rate,
+              result_OOH$best_Rate,
+              result_TV$best_Rate,
+              result_Search$best_Rate ,
+              result_Display$best_Rate,
+              result_Social$best_Rate)
+cbind(ChannelName,AdstockRate)
+```
+
+```{r}
+#assuming: 
+# each advertising variable has it’s own adstock_Rate
+# simple  Decay-Effect Mode
+
+# Magazine
+# adjusted_sales
+Magazine=data.frame(X_ad$Magazine)
+result_Magazine=Get_bestRate(0,Magazine,adjusted_sales,vali_len,Num_loop,adstock_Rates) 
+# result_Magazine$cv_result
+# result_Magazine$best_Rate    #0.6
+
+# Newspaper
+# adjusted_sales
+Newspaper=data.frame(X_ad$Newspaper)
+result_Newspaper=Get_bestRate(0,Newspaper,adjusted_sales,vali_len,Num_loop,adstock_Rates) 
+# result_Newspaper$cv_result
+# result_Newspaper$best_Rate   #1
+
+# Radio
+# adjusted_sales
+Radio=data.frame(X_ad$Radio)
+result_Radio=Get_bestRate(0,Radio,adjusted_sales,vali_len,Num_loop,adstock_Rates) 
+# result_Radio$cv_result
+# result_Radio$best_Rate   #0
+
+# OOH
+# adjusted_sales
+OOH=data.frame(X_ad$OOH)
+result_OOH=Get_bestRate(0,OOH,adjusted_sales,vali_len,Num_loop,adstock_Rates) 
+# result_OOH$cv_result
+# result_OOH$best_Rate    #1
+
+# TV
+# adjusted_sales
+TV=data.frame(X_ad$TV)
+result_TV=Get_bestRate(0,TV,adjusted_sales,vali_len,Num_loop,adstock_Rates) 
+# result_TV$cv_result
+# result_TV$best_Rate   #0
+
+
+# Search
+# adjusted_sales
+Search=data.frame(X_ad$Search)
+result_Search=Get_bestRate(0,Search,adjusted_sales,vali_len,Num_loop,adstock_Rates) 
+# result_Search$cv_result
+# result_Search$best_Rate    #0.6
+
+# Display
+# adjusted_sales
+Display=data.frame(X_ad$Display)
+result_Display=Get_bestRate(0,Display,adjusted_sales,vali_len,Num_loop,adstock_Rates) 
+# result_Display$cv_result
+# result_Display$best_Rate  #0
+
+# Social
+# adjusted_sales
+Social=data.frame(X_ad$Social)
+result_Social=Get_bestRate(0,Social,adjusted_sales,vali_len,Num_loop,adstock_Rates) 
+# result_Social$cv_result
+# result_Social$best_Rate   #0.35
+
+#"Magazine"  "Newspaper" "Radio"     "OOH"       "TV"        "Search"    "Display"   "Social"    
+Magazine.adstock=AdstockTransform(Magazine,result_Magazine$best_Rate,0)
+Newspaper.adstock=AdstockTransform(Newspaper,result_Newspaper$best_Rate,0)
+Radio.adstock=AdstockTransform(Radio,result_Radio$best_Rate,0)
+OOH.adstock=AdstockTransform(OOH,result_OOH$best_Rate,0)
+TV.adstock=AdstockTransform(TV,result_TV$best_Rate,0)
+Search.adstock=AdstockTransform(Search,result_Search$best_Rate,0)
+Display.adstock=AdstockTransform(Display,result_Display$best_Rate,0)
+Social.adstock=AdstockTransform(Social,result_Social$best_Rate,0)
+
+#modeling
+media_ad=c(Magazine.adstock,Newspaper.adstock,Radio.adstock,OOH.adstock,TV.adstock,Search.adstock,Display.adstock,Social.adstock)
+modFit.4 <-lm(adjusted_sales~.,data=media_ad)
+summary(modFit.4)
+
+par(mfrow=c(2,2))
+plot(modFit.4)
+par(mfrow=c(1,1))
+
+
+```
+
+<font color="blue">
+ modFit.4 has the larger R2  among the models ,so 60.36% of the variability of the response data can bee explained by the model.
+</font>
+
+```{r}
+##Checking for multicolinearity within the independent variables using VIF 
+vif(modFit.4) 
+```
+
+<font color="blue">
+Most scores are less than 5 except OOH,but it still leee than 10, so we could assume there is no multicolliniarity between the independent variables.
+</font>
+
+```{r}
+##----compare  
+modFit.0 <-lm(sales~.,data=X_ad)
+modFit.0_1 <-lm(adjusted_sales~.,data=X_ad)
+R2_before_0=summary(modFit.0)$r.squared 
+R2_before=summary(modFit.0_1)$r.squared
+R2_after=summary(modFit.4)$r.square
+R2_before_0
+R2_before
+R2_after 
+```
+
+<font color="blue"> Model performence increases when adstock is involved. </font>
+
+
+#### 3.4 Model reuslts analysis
+
+
+#####  3.4.1 Adstock rate 
+```{r}
+#Adstock rate is a measurement of the advertising decay effect.  
+ChannelName=names(X_ad)
+AdstockRate=c(result_Magazine$best_Rate, 
+        result_Newspaper$best_Rate,
+        result_Radio$best_Rate,
+        result_OOH$best_Rate,
+        result_TV$best_Rate,
+        result_Search$best_Rate ,
+        result_Display$best_Rate,
+        result_Social$best_Rate)
+cbind(ChannelName,AdstockRate)
+```
+
+
+#####  3.4.2 Decay effect 
+
+Adstock Affect: the prolonged or lagged effect of advertising on consumer purchase behaviour</br>
+There are two dimensions to advertising adstock:</br>
+*  Decay effect:the impact of past advertisement on present sales;</br>
+*  saturation or diminishing returns effect.</br>
+
+<font color="blue"> According to the Adstock Rates we have got in this case, decay effect exits on Magazine,Newspaper,OOH,Search and Social channels.</font>
+
+Take the magezine as an example,
+
+```{r}
+Magazine.adstock=AdstockTransform(Magazine,0.6,0)
+Magazine.adstock=data.frame(Magazine.adstock[[1]])
+colnames(Magazine.adstock)="Magazine.adstock"
+Magazine.original=rawdata$Magazine
+Sales=rawdata$Sales
+#adjusted_sales
+compare_df=data.frame(Sales,adjusted_sales,Magazine.original=Magazine.original,Magazine.adstock=Magazine.adstock)
+```
+ 
+```{r}
+mg_lm_1=lm(adjusted_sales~Magazine.original,data=compare_df)
+mg_lm_2=lm(adjusted_sales~Magazine.adstock,data=compare_df)
+
+intercept1=coefficients(summary(mg_lm_1))[1] 
+slope1=coefficients(summary(mg_lm_1))[2]
+R2_1=summary(mg_lm_1)$r.squared
+
+intercept2=coefficients(summary(mg_lm_2))[1] 
+slope2=coefficients(summary(mg_lm_2))[2]
+R2_2=summary(mg_lm_2)$r.squared
+
+```
+
+```{r}
+Before_Adstock=c(intercept1,slope1,R2_1)
+Aftter_Adstock=c(intercept2,slope2,R2_2)
+result_comp=rbind(Before_Adstock,Aftter_Adstock)
+colnames(result_comp)<-c("Intercept","Slope","R2")
+result_comp
+```
+ 
+ 
+```{r}
+ggplot(data =compare_df,aes(y=Sales,x=Magazine.original))+    
+  geom_point(data =compare_df,aes(x=Magazine.original,colour='red'),size=3)+
+  geom_line(aes(x=Magazine.original, colour="red"),size=1) +
+  xlab("Magazine spending")+ylab("Sales")+
+  ggtitle ("Sales vs. Magazine Before Adstock") +geom_smooth(method=lm)+
+  theme(plot.title = element_text(hjust = 0.5))
+```
+ 
+```{r}
+ggplot(data = compare_df,aes(y=Sales,x=Magazine.original))+    
+  geom_point(data =compare_df,aes(x=Magazine.adstock,colour='blue'),size=3)+
+  geom_line(aes(x=Magazine.adstock, colour="blue"),size=1) +
+  xlab("Magazine spending")+ylab("Sales")+
+  ggtitle ("Sales vs. Magazine After Adstock") +geom_smooth(method=lm)+
+  theme(plot.title = element_text(hjust = 0.5))
+ 
+```
+
+
+```{r}
+#How much to spend on marketing activities to increase sales by some percent (15%)?
+summary(modFit.4)
+```
+
+* <font color="blue"> The base sales(adjusted) is 1546;</font>
+* <font color="blue"> For one  unit increase in Radio spending, there  will be a 0.011 unit  increase in adjusted_sales;</font>
+* <font color="blue"> ??? Why negtive slopes?</font>
+ 
+
+### 4 Model  testing
+
+```{r warning=FALSE}
+#all the ad_transformed media spend 
+media_ad=data.frame(media_ad)  #got when buiding modFit.4
+adjusted_sales
+
+#ts_Split$train
+#ts_Split$test
+ 
+ColNames=names(media_ad)
+
+testing_result<- data.frame(matrix(ncol = 3, nrow = 0))
+colnames(testing_result) <- c( "R2", "RMSE","MAPE")
+
+for(i in 1:Num_loop)
+{
+  #get the trainnin and testing data 
+  adstock_Train=data.frame(media_ad[ts_Split$train[i][[1]],])
+  y_Train=adjusted_sales[ts_Split$train[i][[1]]]
+  
+ 
+  adstock_Test=data.frame(media_ad[ts_Split$test[i][[1]],])
+  y_test=adjusted_sales[ts_Split$test[i][[1]]]
+ 
+  colnames(adstock_Train) <- ColNames
+  colnames(adstock_Test) <- ColNames
+  
+  modFit <-lm(y_Train~.,data= adstock_Train)
+  
+  
+  #test 
+  y_pred=predict(modFit,newdata=adstock_Test)
+  
+  #meric
+  R2=summary(modFit)$r.squared 
+  RMSE=rmse(y_test,y_pred) # rmse(actual, predicted)
+  MAPE=MAPE(y_pred,y_test)# MAPE(y_pred, y_true)
+  testing_result=rbind(testing_result,data.frame(R2, RMSE,MAPE) ) 
+  
+} 
+ 
+testing_result%>%  
+  summarise(
+    R2_avg= mean(R2),
+    RMSE_avg = mean(RMSE),
+    MAPE_avg = mean(MAPE)
+)
+```
+
+<font color="blue"> Model having MAPE nearly  10% is considered as not bad model.</font>
+
+
+
+
+### 5 Contribution Charts 
+```{r warning=FALSE}
+# calculating the relative importance of different marketing variables and structural components
+ 
+relative_importance=calc.relimp(modFit.4, type = c("car"), rela = TRUE)
+#used 'car' as cost function; rela=TRUE give % that a variable contributed to the adjusted R2
+relative_importance
+relative_imp=relative_importance$car
+
+
+contribution=data.frame(cbind(ChannelName=ChannelName,relative_imp=as.character(relative_imp)))%>%arrange(desc(relative_imp))  
+contribution$relative_imp=as.numeric(as.character(contribution$relative_imp))
+ 
+ggplot(data = contribution, mapping = aes(x = reorder(ChannelName, round(contribution$relative_imp,3)), y = relative_imp,fill='steelblue'))+ 
+  geom_bar(stat = 'identity')+ 
+    xlab ("Media Channel")+
+    ylab("Relative Importance") +
+    ggtitle ("Drivers of sales")+theme(plot.title = element_text(hjust = 0.5))+guides(fill=F)+coord_flip()  
+
+summary(modFit.4)
+```
+```{r}
+
+#what is the unit of sales? 
+# adjusted_sales?
+
+sales_sum=sum(rawdata$Sales)
+revenue_of_each_variable=relative_imp*sales_sum
+spending_of_each_variable=colSums(X_ad) 
+ROAS=revenue_of_each_variable/spending_of_each_variable
+ROAS
+
+
+print("====================")
+sales_sum_1=sum(rawdata$Sales*(rawdata$Price1+rawdata$Price2+rawdata$Price3))
+revenue_of_each_variable_1=relative_imp*sales_sum_1
+ROAS_1=revenue_of_each_variable_1/spending_of_each_variable
+
+ROAS_1
+ 
+```
+ 
+ 
+
+### 6 The following steps
+
+* <font color="blue"> considering the prices;</br> </font>
+* <font color="blue"> feature selection; </br> </font>
+* <font color="blue"> model Selection;</br> </font>
+* <font color="blue"> any other optimization;</br> </font>
+* <font color="blue"> is the ROAS right?</br> </font>
+
+ 
+
+#### 7 Reference
+* https://www.listendata.com/2019/09/marketing-mix-modeling.html
+* https://lonepatient.top/2018/06/10/time-series-nested-cross-validation.html#2-%E4%BB%BB%E6%84%8F%E9%80%89%E6%8B%A9%E6%B5%8B%E8%AF%95%E9%9B%86  
+* https://scikit-learn.org/stable/modules/cross_validation.html
+* https://github.com/shatrunjai/MarketMixModelling/blob/master/FinalCode.R
+* https://rpubs.com/nihil0/mmm01
+* https://mpra.ub.uni-muenchen.de/7683/4/MPRA_paper_7683.pdf
+* https://www.dataapplab.com/towardsdatascience-com-market-mix-modeling/
+* https://www.latentview.com/marketing-mix-modeling/
+* https://en.wikipedia.org/wiki/Advertising_adstock
+
