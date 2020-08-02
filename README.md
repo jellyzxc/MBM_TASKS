@@ -1,4 +1,4 @@
-# MAMTASKS
+# MBMTASKS
 This is the code and data for the DS  role interview
  
 there are two tasks :
